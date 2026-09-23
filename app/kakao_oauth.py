@@ -87,11 +87,14 @@ def get_valid_access_token() -> str:
     return tokens["access_token"]
 
 
+SEND_LABEL = "[PC Bridge] "
+
+
 def send_to_me(text: str) -> None:
     access_token = get_valid_access_token()
     template_object = {
         "object_type": "text",
-        "text": text,
+        "text": SEND_LABEL + text,
         "link": {},
     }
     resp = httpx.post(

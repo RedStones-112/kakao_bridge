@@ -1,4 +1,5 @@
 fastapi
 uvicorn
-pywinauto
 pydantic
+httpx
+python-dotenv

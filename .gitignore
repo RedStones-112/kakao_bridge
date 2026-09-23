@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 *.log
 tools/export_test/
+.env
+app/.kakao_token.json
+app/.last_inbound.json
+tools/bin/

@@ -1,18 +1,38 @@
 # kakao_bridge
 
-카카오톡 데스크톱 앱의 "나와의 채팅"(메모장) 방을 다른 프로젝트에서 로컬 HTTP API로 읽고 쓸 수 있게 해주는 브릿지 서버.
+카카오톡 "나와의 채팅"을 다른 프로젝트에서 로컬 HTTP API로 읽고 쓸 수 있게 해주는 브릿지 서버.
 
-카카오 공식 API는 "나에게 보내기"(쓰기)만 지원하고 대화 내용을 읽어올 방법이 없기 때문에, 이 프로젝트는
-Windows UI 자동화(pywinauto)로 PC 카카오톡 앱을 직접 조작한다. 메시지 목록 컨트롤은 완전히 커스텀 렌더링이라
-화면에서 텍스트를 직접 읽을 수 없어서, 읽기는 카카오톡의 "대화 내보내기" 기능(.txt 저장)을 이용해 마지막
-메시지만 파싱해서 돌려준다.
+**완전히 공식 API 기반이다.** 카카오톡 창을 띄우거나 UI를 자동화하지 않는다.
 
-## 사전 준비
+## 구조
 
-1. 카카오톡 PC 앱이 설치되어 있고 로그인되어 있어야 한다.
-2. **"나와의 채팅" 방을 한 번은 직접 열어야 한다.** (내 프로필 클릭 → 나에게 채팅하기 등) 그래야 채팅
-   목록에 나타나서 이후 검색으로 찾을 수 있다.
-3. 기본으로는 방 이름이 **"메모장"**이라고 가정한다. 다르면 `KAKAO_ROOM_TITLE` 환경 변수로 바꿀 수 있다.
+카카오 공식 API는 "나에게 보내기"(쓰기)만 지원하고 대화 내용을 읽어올 방법이 없기 때문에,
+읽기/쓰기를 서로 다른 공식 메커니즘으로 나눠서 구현했다.
+
+- **쓰기**: 카카오 로그인(OAuth) + [카카오톡 메시지 API `/v2/api/talk/memo/default/send`](https://developers.kakao.com/docs/latest/ko/kakaotalk-message/rest-api#default-send-me) ("나에게 보내기")
+- **읽기**: 카카오톡 **채널**(비즈니스 계정)을 하나 만들고, 여기에 **카카오 i 오픈빌더** 챗봇을 연결.
+  채널로 메시지가 오면 카카오가 우리 스킬 서버(웹훅)로 POST해주고, 그 내용을 로컬에 저장했다가 API로 돌려준다.
+  즉 "나와의 채팅"이 아니라 **별도로 만든 채널("PC Bridge")과 대화**하는 방식이다.
+
+## 사전 준비 (최초 1회, 카카오 디벨로퍼스/비즈니스 콘솔에서 수동 설정 필요)
+
+1. [카카오 디벨로퍼스](https://developers.kakao.com)에서 앱 생성 (예: `톡_PC_Bridge`)
+2. **카카오 로그인** 활성화
+   - `앱 > 플랫폼 키 > REST API 키`에서 **카카오 로그인 리다이렉트 URI**에
+     `http://localhost:8765/oauth/callback` 등록
+   - `카카오 로그인 > 동의항목`에서 **카카오톡 메시지 전송(`talk_message`)** 스코프를 "선택 동의"로 설정
+   - `앱 > 일반`에서 **앱 아이콘 등록** 후 **개인 개발자 비즈 앱 전환** (사업자번호 없이 본인인증으로 가능).
+     talk_message 스코프가 실제로 토큰에 붙으려면 비즈 앱 전환이 필요하다.
+3. [카카오비즈니스](https://business.kakao.com)에서 **카카오톡 채널** 생성 (검색용 ID 등)
+   - 채널 홈에서 **채널 공개**, **검색 허용**은 필요할 때만 켜고 평소엔 꺼두는 걸 권장 (개인용 브릿지라 불특정 다수가 찾을 필요 없음)
+   - **채널 관리 > 채팅 설정 > 채팅을 반드시 OFF로 유지할 것** — 이게 켜져 있으면 들어오는 메시지가
+     챗봇이 아니라 사람이 받는 1:1 상담 채팅으로 가로채여서 웹훅이 전혀 호출되지 않는다 (실제로 겪은 문제).
+4. [카카오 i 오픈빌더](https://i.kakao.com)에서 카카오톡 챗봇 생성
+   - **스킬** 생성: URL에 `<외부에서 접근 가능한 주소>/kakao/skill` 등록
+   - **시나리오 > 폴백 블록**에서 스킬을 위 스킬로 지정하고, 봇 응답을 "스킬데이터 사용"으로 변경
+     (기본 텍스트 응답을 쓰면 우리 웹훅이 절대 호출되지 않는다)
+   - **설정**에서 운영 채널을 위에서 만든 채널로 연결
+   - **배포** 탭에서 전체 배포 실행
 
 ## 설치
 
@@ -21,61 +41,57 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-> 참고: 카카오톡은 32비트 프로세스라서, 파이썬이 어떤 비트수여도(64비트 포함) 동작은 하지만
-> `pywinauto`가 경고를 출력할 수 있다. 무시해도 된다.
-> venv를 만드는 python이 MSYS2/UCRT64 등 특수 빌드면 `pydantic-core` 같은 컴파일 패키지의 wheel을
-> 못 찾을 수 있다. 이 경우 `C:\Users\<사용자>\AppData\Local\Programs\Python\Python3xx\python.exe` 같은
-> 공식 Windows 배포판 파이썬으로 venv를 새로 만들어야 한다.
+`.env` 파일을 만든다 (gitignore됨, 절대 커밋하지 말 것):
+
+```
+KAKAO_REST_API_KEY=<REST API 키>
+KAKAO_CLIENT_SECRET=<클라이언트 시크릿>
+KAKAO_REDIRECT_URI=http://localhost:8765/oauth/callback
+```
 
 ## 실행
 
 ```powershell
+# 1) 서버 실행
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8765 --host 127.0.0.1
+
+# 2) 외부(카카오 서버)에서 웹훅에 접근할 수 있도록 터널 실행 (예: cloudflared quick tunnel)
+cloudflared tunnel --url http://localhost:8765
 ```
+
+`cloudflared tunnel --url ...`로 뜨는 `https://xxxx.trycloudflare.com` 주소는 **재시작할 때마다 바뀐다.**
+바뀔 때마다 오픈빌더의 스킬 URL(`.../kakao/skill`)을 새 주소로 다시 저장해야 웹훅이 계속 동작한다.
+상시 운영하려면 고정 도메인이 있는 터널(예: named Cloudflare Tunnel, 자체 서버 배포 등)로 바꾸는 걸 권장.
+
+### 최초 1회: 카카오 로그인 연동
+
+브라우저에서 `http://127.0.0.1:8765/oauth/authorize` 열고 로그인 동의 → 자동으로 콜백 처리되며
+토큰이 `app/.kakao_token.json`에 저장된다 (gitignore됨). 이후 만료 시 refresh_token으로 자동 갱신.
 
 ## API
 
-### `POST /send` — 메시지 전송
+- `GET /health` → `{"status": "ok"}`
+- `POST /send` — "나에게 보내기"로 메시지 전송
+  - body: `{"message": "보낼 내용"}`
+  - 응답: `{"status": "ok"}`
+- `GET /messages/last` — 채널로 마지막에 들어온 메시지 조회
+  - 응답 예: `{"sender": "...", "text": "내용", "received_at": 1790165451.52}`
+  - 메시지가 없으면 404
+- `POST /kakao/skill` — 오픈빌더 스킬 서버(웹훅). 카카오 서버가 호출하는 용도이며 직접 호출할 일은 없다.
 
-```json
-{ "message": "안녕", "wait_for_fullscreen": true }
+## 파일 구성
+
+```
+app/
+  main.py           # FastAPI 서버, 엔드포인트 정의
+  kakao_oauth.py     # 카카오 로그인 OAuth + "나에게 보내기" 메시지 API 래퍼
+  kakao_channel.py   # 오픈빌더 웹훅으로 받은 메시지 저장/조회
+  .kakao_token.json  # (gitignore) OAuth 토큰 저장 파일, 실행 중 자동 생성
+  .last_inbound.json # (gitignore) 마지막으로 받은 메시지 저장 파일, 실행 중 자동 생성
+.env                 # (gitignore) 카카오 앱 키/시크릿
 ```
 
-- `wait_for_fullscreen` (기본 true): 전체화면 앱(게임 등)이 떠 있으면 카카오톡 창을 조작할 수 없다.
-  `true`면 5분 간격으로 재확인하며 전체화면이 끝날 때까지 요청을 대기시킨다(계속 열려있는 요청).
-  `false`면 즉시 `503`을 반환한다.
+## 주의사항
 
-응답: `{"status": "ok"}`
-
-### `GET /messages/last` — 마지막 메시지 읽기
-
-쿼리 파라미터: `wait_for_fullscreen` (기본 true, 위와 동일)
-
-응답 예:
-```json
-{"sender": "이재혁", "time": "오후 12:49", "text": "연속 테스트\n두번째 줄"}
-```
-
-메시지가 하나도 없으면 `404`.
-
-## 동작 방식 / 주의사항
-
-- **창 노출**: 전체화면 앱이 없으면 카카오톡 창을 그냥 띄워서(포커스를 가져와서) 작업한다. 일반
-  창 모드 앱(게임 로비, 브라우저 등) 위에서는 카카오톡 창이 잠깐 보였다가 사라질 수 있다.
-  전체화면 앱이 감지되면 작업을 미루고 5분마다 재시도한다 (`app/config.py`의
-  `FULLSCREEN_RETRY_INTERVAL_SEC`로 조절 가능).
-- **읽기는 "대화 내보내기"(Ctrl+S)를 이용한다.** 매 호출마다 `%TEMP%\kakao_bridge_export`에 임시
-  .txt를 저장했다가 마지막 메시지만 파싱하고 바로 삭제한다. 대화방이 매우 크면 내보내기 자체가
-  조금 걸릴 수 있다.
-- 카카오톡의 채팅방 목록/메시지 목록 UI는 접근성 API(UI Automation/MSAA)로 텍스트를 전혀 읽을 수
-  없는 완전 커스텀 컨트롤이라, 좌표 기반 클릭에 의존하는 부분이 있다 (검색 결과 더블클릭, 내보내기
-  완료 팝업의 "확인" 버튼 등). 카카오톡 클라이언트 UI가 크게 바뀌면 `app/kakao_controller.py`의
-  좌표값을 다시 잡아야 할 수 있다.
-- `tools/inspect_ui.py`, `tools/screenshot.py`, `tools/check_fullscreen.py`는 UI 구조를 다시
-  조사하거나 디버깅할 때 쓰는 보조 스크립트다.
-
-## 설정
-
-`app/config.py` 또는 환경 변수로 조절:
-
-- `KAKAO_ROOM_TITLE` (기본 `메모장`): "나와의 채팅" 방의 실제 제목.
+- `.env`와 `app/.kakao_token.json`에는 민감 정보(클라이언트 시크릿, refresh token)가 들어있다. 절대 커밋하지 말 것.
+- 다른 프로젝트에서 쓰려면 이 서버(`:8765`)와 cloudflared 터널이 계속 떠 있어야 한다.
